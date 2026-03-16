@@ -74,7 +74,11 @@ class CLI:
         avitoScraper.get_and_save_cookies(scraper)
 
     def item_parser(
-        self, scraper: CloudScraper, avitoScraper: AvitoScraper, searchId: int = 101, page: int = 0
+        self,
+        scraper: CloudScraper,
+        avitoScraper: AvitoScraper,
+        searchId: int = 101,
+        page: int = 0,
     ):
         categoryId = self.choose_category()
 
@@ -103,14 +107,15 @@ class CLI:
             categoryId=categoryId,
             locationId=locationId,
             searchId=searchId,
-            page_number=page
+            page_number=page,
         )
-        avitoScraper.get_items(url, scraper)
+        avitoScraper.get_items(url, scraper, filename=f"output_{page}.json")
 
     def item_enricher(
         self, url: str, scraper: CloudScraper, avitoScraper: AvitoScraper
     ):
         avitoScraper.get_more_data(url, scraper)
+
 
 
 if __name__ == "__main__":
@@ -150,12 +155,11 @@ if __name__ == "__main__":
                             scraper,
                             avitoScraper,
                             searchId=utility.searchFilters.get("По дате"),
-                            page=page
+                            page=page,
                         )
+                        filtrated = avitoScraper.data_filter(filename=f'output_{page}.json')
                         page += 1
-                        filtrated = avitoScraper.data_filter()
                         sleep(3)
-                    
 
                 elif choose == "9":
                     continue

@@ -342,13 +342,6 @@ class AvitoScraper:
             print("Нет товаров для обработки. Завершение.")
             return
 
-        choose = input(
-            "Нужен ли файл пример с данными (потом можно продолжить выкачку)\n0 да/1 нет: "
-        )
-        if choose == "0":
-            with open("test_items.json", "w", encoding="utf-8") as f:
-                json.dump(items, f, ensure_ascii=False, indent=2)
-
         ordered_keys = []
         seen = set()
         for item in items:
@@ -379,13 +372,9 @@ class AvitoScraper:
 
         filtered_items = self.filter_items(items, top_selectors)
 
-        out_file = input(f"Имя выходного файла (по умолчанию {filename}): ").strip()
-        if not out_file:
-            out_file = filename
-
-        with open(out_file, "w", encoding="utf-8") as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(filtered_items, f, ensure_ascii=False, indent=2)
-        print(f"\nСохранено {len(filtered_items)} записей в файл {out_file}")
+        print(f"\nСохранено {len(filtered_items)} записей в файл {filename}")
 
     def get_more_data(
         self, url: str, scraper: CloudScraper, filename: str = "output.json"
