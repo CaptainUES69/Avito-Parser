@@ -3,28 +3,50 @@ from time import sleep
 
 from cloudscraper import CloudScraper
 
-from .conf import CustomLogger
+from .conf import CustomLogger, Logger
 from .scraper import AvitoScraper
-from .utilities import Utilities
+from .utilities import Categories, SearchTypes, ProxyTypes, CityLocationID
 
 
 class CLI:
-    utility: Utilities
+    logger: Logger = CustomLogger("CLI")._logger
 
-    def __init__(self):
-        self.utility = Utilities()
+    # Внутренние методы
 
-    def choose_popular_cities(
-        self,
-    ):
-        cities = list(self.utility.popularCities.keys())
-        for index in range(len(cities)):
-            print(f"{index} --- {cities[index]}")
-        city = int(input("Выберите категорию по номеру: "))
+    def __init__(self): ...
 
-        return self.utility.popularCities.get(cities[city])
+    def __choose_category(self) -> int:
+        for index, type in enumerate(Categories):
+            print(f"{index} --- {type.value.name}")
 
-    def choose_city_url(self, cities: list[dict]) -> str:
+        types = list(Categories)
+        choose = int(input("Выберите категорию из указанных выше: "))
+
+        answer = input("Выбрать подкатегорию 0 Да/1 Нет: ")
+        if answer != "0":
+            return types[int(choose)].value.category_id
+
+        subs = types[int(choose)].value.subs_list
+        if not subs:
+            print("Подкатегории отсутствуют")
+            return types[int(choose)].value.category_id
+
+        for index in range(len(subs)):
+            print(f"{index} --- {subs[index].name}")
+
+        subcategory = int(input("Выберите подкатегорию по номеру: "))
+        return subs[subcategory].category_id
+
+    def __choose_popular_cities(self):
+        for index, type in enumerate(CityLocationID):
+            print(f"{index} --- {type.name}")
+
+        types = list(CityLocationID)
+        choose = int(input("Выберите город из указанных выше: "))
+
+        return types[int(choose)].value
+
+    def __choose_city_url(self, cities: list[dict]) -> str:
         index: int = 0
         for city in cities:
             print(f"{index} --- {city.get('city_name')}     {city.get('region_name')}")
@@ -34,53 +56,31 @@ class CLI:
 
         return cities[choosen].get("city_id")
 
-    def choose_category(
-        self,
-    ) -> int:
-        keys = list(self.utility.categoryByName.keys())
-        for index in range(len(keys)):
-            print(f"{index} --- {keys[index]}")
-        category = int(input("Выберите категорию по номеру: "))
+    def __choose_search_type(self):
+        for index, type in enumerate(SearchTypes):
+            print(f"{index} --- {type.name}")
+        types = list(SearchTypes)
+        choose = int(input("Выберите сортировку по номеру: "))
 
-        answer = input("Выбрать подкатегорию 0 да/1 нет: ")
-        if answer.lower() != "0":
-            return self.utility.categoryByName.get(keys[category]).category_id
+        return types[int(choose)].value
 
-        subs = self.utility.categoryByName.get(keys[category]).subs_list
-        if not subs:
-            print("Подкатегории отсутствуют")
-            return self.utility.categoryByName.get(keys[category]).category_id
-        for index in range(len(subs)):
-            print(f"{index} --- {subs[index].name}")
-
-        subcategory = int(input("Выберите подкатегорию по номеру: "))
-        return self.utility.categoryByName.get(keys[subcategory]).category_id
-
-    def choose_search_type(
-        self,
-    ):
-        keys = list(self.utility.searchFilters.keys())
-        for index in range(len(keys)):
-            print(f"{index} --- {keys[index]}")
-        filter = int(input("Выберите сортировку по номеру: "))
-
-        return self.utility.searchFilters.get(keys[filter])
-
-    def choose_params(self, categoryId: int) -> list:
+    def __choose_params(self, categoryId: int) -> list:
         url = f"https://www.avito.ru/web/1/js/items?categoryId={categoryId}"
         print("Доделать позже")
 
+    # Входные точки
+
     def cookie_test(self, scraper: CloudScraper, avitoScraper: AvitoScraper):
-        avitoScraper.get_and_save_cookies(scraper)
+        avitoScraper.headers_cookies_get_and_save(scraper)
 
     def item_parser(
         self,
         scraper: CloudScraper,
         avitoScraper: AvitoScraper,
-        searchId: int = 101,
+        searchId: SearchTypes = SearchTypes.DEFAULT.value,
         page: int = 0,
     ):
-        categoryId = self.choose_category()
+        categoryId = self.__choose_category()
 
         choose = input(
             "\n0 - выбрать из 10 миллиоников\n1 - Найти город через авито\nПо умолчанию поиск через авито: "
@@ -91,13 +91,13 @@ class CLI:
             )
             if not info:
                 exit()
-            locationId = self.choose_city_url(info)
+            locationId = self.__choose_city_url(info)
 
         else:
-            locationId = self.choose_popular_cities()
+            locationId = self.__choose_popular_cities()
 
-        if searchId == 101:
-            searchId = self.choose_search_type()
+        if searchId == SearchTypes.DEFAULT.value:
+            searchId = self.__choose_search_type()
 
         else:
             pass
@@ -109,23 +109,46 @@ class CLI:
             searchId=searchId,
             page_number=page,
         )
+        self.logger.info(url)
         avitoScraper.get_items(url, scraper, filename=f"output_{page}.json")
+        self.logger.info(f"Файл output_{page}.json успешно создан")
 
     def item_enricher(
-        self, url: str, scraper: CloudScraper, avitoScraper: AvitoScraper
+        self,
+        scraper: CloudScraper,
+        avitoScraper: AvitoScraper,
+        filename: str = "output.json",
     ):
-        avitoScraper.get_more_data(url, scraper)
+        with open(filename, "r", encoding="utf-8") as file:
+            items: list[dict] = json.load(file)
 
+        for item in items:
+            avitoScraper.get_more_data(item.get("urlPath"), scraper)
+            print("\nПерерыв перед следующим запросом")
+            sleep(3)
+
+    def proxy_manage(
+        self,
+        scraper: CloudScraper,
+        avitoScraper: AvitoScraper,
+    ):
+        print(f"\nКакой тип прокси использовать?")
+        avitoScraper.proxies_number_by_type()
+        for index, type in enumerate(ProxyTypes):
+            print(f"{index} --- {type.name}")
+
+        types = list(ProxyTypes)
+        choose = int(input("Выберите тип прокси из указанных выше: "))
+        avitoScraper.set_proxy(scraper, proxy_type=types[int(choose)].value)
 
 
 if __name__ == "__main__":
     try:
-        utility = Utilities()
         avitoScraper = AvitoScraper()
         cli = CLI()
         scraper = avitoScraper.create_scraper(
-            high_security=False
-        )  # high_security = true Для улучшенного скрапера но ддля работы обязательно: `playwright install chromium`
+            high_security=True
+        )  # high_security = true Для улучшенного скрапера но для работы обязательно: `playwright install chromium`
 
         while True:
             choose = input(
@@ -139,13 +162,7 @@ if __name__ == "__main__":
                     cli.item_parser(scraper, avitoScraper)
 
                 elif choose == "1":
-                    with open("output.json", "r", encoding="utf-8") as file:
-                        items: list[dict] = json.load(file)
-
-                    for item in items:
-                        cli.item_enricher(item.get("urlPath"), scraper, avitoScraper)
-                        print("\nПерерыв перед следующим запросом")
-                        sleep(3)
+                    cli.item_enricher(scraper, avitoScraper)
 
                 elif choose == "2":
                     filtrated: bool = False
@@ -154,10 +171,12 @@ if __name__ == "__main__":
                         cli.item_parser(
                             scraper,
                             avitoScraper,
-                            searchId=utility.searchFilters.get("По дате"),
+                            searchId=SearchTypes.DATE.value,
                             page=page,
                         )
-                        filtrated = avitoScraper.data_filter(filename=f'output_{page}.json')
+                        filtrated = avitoScraper.data_filter(
+                            filename=f"output_{page}.json"
+                        )
                         page += 1
                         sleep(3)
 
@@ -165,7 +184,7 @@ if __name__ == "__main__":
                     continue
 
             elif choose == "1":
-                print("\nВ разработке...")
+                cli.proxy_manage(scraper, avitoScraper)
 
             elif choose == "2":
                 cli.cookie_test(scraper, avitoScraper)

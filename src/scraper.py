@@ -2,14 +2,15 @@ import json
 import os
 import pickle
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Union
 from urllib import parse
 
-from cloudscraper import CloudScraper, create_scraper, create_high_security_scraper
+from cloudscraper import CloudScraper, create_high_security_scraper, create_scraper
 from fake_useragent import UserAgent
-from datetime import datetime
+
 from .conf import CustomLogger, Logger
-from .utilities import Utilities
+from .utilities import Categories, ProxyTypes, SearchTypes, CityLocationID
 
 
 class AllFields:
@@ -21,171 +22,15 @@ class AllFields:
 class AvitoScraper:
     logger: Logger = CustomLogger("scrapper")._logger
     base_url: str = "https://www.avito.ru"
-    utility: Utilities
     cookie_file: str
     ALL_FIELDS = AllFields()
 
+    # Внутренние методы
+
     def __init__(self, cookie_file_name: str = "avito_cookies.pkl"):
-        self.utility = Utilities()
         self.cookie_file = cookie_file_name
 
-    def create_scraper(
-        self,
-        delay: int = 15,
-        stealth_min: float = 3.0,
-        stealth_max: float = 6.0,
-        high_security: bool = False,
-    ) -> CloudScraper:
-        ua = UserAgent()
-        random_ua = ua.random
-        if high_security:
-            scraper = create_high_security_scraper(
-                delay=delay,
-                browser="chrome",
-                debug=False,  # Отладка
-                enable_stealth=True,
-                stealth_options={
-                    "min_delay": stealth_min,
-                    "max_delay": stealth_max,
-                    "human_like_delays": True,
-                    "randomize_headers": True,
-                    "browser_quirks": True,
-                },
-            )
-
-        else:
-            scraper = create_scraper(
-                interpreter="js2py",  # js2py nodejs, hybrid но нужен playwright
-                delay=delay,
-                browser="chrome",
-                debug=False,  # Отладка
-                enable_stealth=True,
-                stealth_options={
-                    "min_delay": stealth_min,
-                    "max_delay": stealth_max,
-                    "human_like_delays": True,
-                    "randomize_headers": True,
-                    "browser_quirks": True,
-                },
-            )
-
-        # Обновляем заголовки, включая случайный User-Agent
-        scraper.headers.update(
-            {
-                "User-Agent": random_ua,
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer": f"{self.base_url}/",
-                "Origin": self.base_url,
-                "DNT": "1",
-            }
-        )
-        self.logger.info(
-            f"\nUser-Agent: {random_ua}\nscraper interpreter: {scraper.interpreter=}"
-        )
-
-        self.load_cookies(scraper)
-
-        return scraper
-
-    def get_and_save_cookies(self, scraper: CloudScraper):
-        response = scraper.get(self.base_url)
-        if response.status_code != 200:
-            print(
-                f"Куки не получены ошибка: {response.reason} {response.status_code}\nВозможно стоит подождать или изменить настройки cloudscraper"
-            )
-            return None
-
-        print("Запрос успешен, сохраняем куки")
-        with open(self.cookie_file, "wb") as f:
-            pickle.dump(scraper.cookies.get_dict(), f)
-
-    def save_cookies(self, scraper: CloudScraper):
-        with open(self.cookie_file, "wb") as f:
-            pickle.dump(scraper.cookies.get_dict(), f)
-
-    def load_cookies(self, scraper: CloudScraper):
-        if os.path.exists(self.cookie_file):
-            with open(self.cookie_file, "rb") as f:
-                cookies = pickle.load(f)
-                scraper.cookies.update(cookies)
-
-    def get_city_id_multi(self, city_name: str, scraper: CloudScraper) -> List[Dict]:
-        encoded_city = parse.quote(city_name)
-        url = "https://www.avito.ru/web/1/slocations?q=" + encoded_city
-
-        response = scraper.get(url, timeout=15)
-        if response.status_code != 200:
-            self.logger.error(
-                f"{response.status_code} {response.reason}\n{response.headers}"
-            )
-            print(
-                f"{response.status_code=} {response.reason}, исправьте настройки cloudscraper или используемые прокси"
-            )
-            return []
-        self.logger.info(f"status code: {response.status_code}\n{response.headers}")
-        self.save_cookies(scraper)
-
-        data = response.json()
-        locations = data.get("result", {}).get("locations", [])
-
-        cities_list = []
-        for loc in locations:
-            if "parent" in loc:
-                city_id = loc["id"]
-                city_name_found = loc.get("names", {}).get("1")
-                region_id = loc["parent"].get("id")
-                region_name = loc["parent"].get("names", {}).get("1")
-                cities_list.append(
-                    {
-                        "city_id": city_id,
-                        "city_name": city_name_found,
-                        "region_id": region_id,
-                        "region_name": region_name,
-                    }
-                )
-
-            elif "from" in loc:
-                from_data = loc["from"]
-                city_name_found = from_data.get("name")
-                region_name = loc.get("names", {}).get("1")
-                city_id = loc["id"]
-                cities_list.append(
-                    {
-                        "city_id": city_id,
-                        "city_name": city_name_found,
-                        "region_id": None,
-                        "region_name": region_name,
-                    }
-                )
-
-        if not cities_list:
-            self.logger.info(f'Города по запросу "{city_name}" не найдены')
-            print(f'Города по запросу "{city_name}" не найдены')
-        return cities_list
-
-    def create_url(
-        self,
-        categoryId: str,
-        locationId: str,
-        radiusNumber: int | str = 0,
-        searchId: int = 101,
-        page_number: int = 0,
-        params: list[str] = [],
-        localPriority: int = 0,
-    ) -> str:
-        category = f"categoryId={categoryId}"
-        location = f"locationId={locationId}"
-        radius = f"radius={radiusNumber}"
-        search = f"s={searchId}"
-        page = f"p={page_number}"
-
-        query_list: list[str] = [category, location, radius, search, page]
-
-        resultUrl = f"https://www.avito.ru/web/1/js/items?" + "&".join(query_list)
-        return resultUrl
-
-    def choose_numbers(
+    def __choose_numbers(
         self, keys: List[str], prompt: str = "Введите номера полей: "
     ) -> List[str]:
         while True:
@@ -233,23 +78,25 @@ class AvitoScraper:
                 return [keys[i - 1] for i in sorted(selected_indices)]
             print("Попробуйте ещё раз.")
 
-    def choose_fields(
+    def __choose_fields(
         self, sample: Any, indent: int = 0, path: str = ""
     ) -> Union[AllFields, Dict]:
         prefix = "  " * indent
         if isinstance(sample, dict):
             keys = list(sample.keys())
             print(f"\n{prefix}Ключ '{path}' (словарь). Доступные поля:")
-            self.print_keys_with_index(keys, indent)
+            self.__print_keys_with_index(keys, indent)
             answer = (
-                input(f"{prefix}Хотите выбрать поля из этого словаря 0 да/1 нет: ")
+                input(f"{prefix}Хотите выбрать поля из этого словаря 0 Да/1 Нет: ")
                 .strip()
                 .lower()
             )
             if answer != "0":
                 return self.ALL_FIELDS
 
-            selected_keys = self.choose_numbers(keys, f"{prefix}Введите номера полей: ")
+            selected_keys = self.__choose_numbers(
+                keys, f"{prefix}Введите номера полей: "
+            )
             selector = {}
             for key in selected_keys:
                 sub_sample = sample.get(key)
@@ -261,7 +108,7 @@ class AvitoScraper:
                         and isinstance(sub_sample[0], dict)
                     )
                 ):
-                    sub_selector = self.choose_fields(
+                    sub_selector = self.__choose_fields(
                         sub_sample, indent + 1, path + "." + key if path else key
                     )
                     selector[key] = sub_selector
@@ -274,13 +121,13 @@ class AvitoScraper:
             print(
                 f"\n{prefix}Ключ '{path}' (список словарей). Выбор полей для элементов списка:"
             )
-            element_selector = self.choose_fields(sample[0], indent + 1, path + "[]")
+            element_selector = self.__choose_fields(sample[0], indent + 1, path + "[]")
             return element_selector
 
         else:
             return self.ALL_FIELDS
 
-    def apply_selector(self, value: Any, selector: Union[AllFields, Dict]) -> Any:
+    def __apply_selector(self, value: Any, selector: Union[AllFields, Dict]) -> Any:
         if isinstance(selector, AllFields):
             return value
 
@@ -288,14 +135,14 @@ class AvitoScraper:
             result = {}
             for key, sub_selector in selector.items():
                 if key in value:
-                    result[key] = self.apply_selector(value[key], sub_selector)
+                    result[key] = self.__apply_selector(value[key], sub_selector)
             return result
 
         if isinstance(value, list) and value and isinstance(value[0], dict):
-            return [self.apply_selector(item, selector) for item in value]
+            return [self.__apply_selector(item, selector) for item in value]
         return value
 
-    def filter_items(
+    def __filter_items(
         self, items: List[Dict], top_selectors: Dict[str, Union[AllFields, Dict]]
     ) -> List[Dict]:
         result = []
@@ -303,16 +150,16 @@ class AvitoScraper:
             new_item = {}
             for key, selector in top_selectors.items():
                 if key in item:
-                    new_item[key] = self.apply_selector(item[key], selector)
+                    new_item[key] = self.__apply_selector(item[key], selector)
             result.append(new_item)
         return result
 
-    def print_keys_with_index(self, keys: List[str], indent: int = 0) -> None:
+    def __print_keys_with_index(self, keys: List[str], indent: int = 0) -> None:
         prefix = "  " * indent
         for idx, key in enumerate(keys, 1):
             print(f"{prefix}{idx}. {key}")
 
-    def get_sample_for_key(self, items: List[Dict], key: str) -> Any:
+    def __get_sample_for_key(self, items: List[Dict], key: str) -> Any:
         for item in items:
             val = item.get(key)
             if val is not None and (
@@ -321,6 +168,252 @@ class AvitoScraper:
             ):
                 return val
         return None
+
+    # Методы для работы с прокси
+
+    def __load_proxies(self, filename: str) -> Dict | None:
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            return
+
+    def __test_proxies(self, scraper: CloudScraper) -> bool:
+        if not self.proxies:
+            print("Прокси не настроены.")
+            return False
+
+        try:
+            response = scraper.get("https://httpbin.org/ip", timeout=10)
+            if response.status_code != 200:
+                print(f"Прокси не работает, статус: {response.status_code}")
+                return False
+
+            ip = response.json().get("origin")
+            print(f"Прокси работает. Ваш внешний IP: {ip}")
+
+            response = scraper.get(self.base_url, timeout=20)
+            if response.status_code != 200:
+                print(
+                    f"Прокси не работает для авито, статус: {response.status_code}\n(429 ошибка вероятно ошибка настроек scraper а не прокси)"
+                )
+                return False
+            print("Прокси прошел проверку основной страницей")
+            return True
+
+        except Exception as e:
+            print(f"Ошибка при тестировании прокси: {e}")
+            return False
+
+    def proxies_number_by_type(self, filename: str = "proxy_file.json"):
+        data: dict[str, list[int]] = self.__load_proxies(filename)
+        for proxies in data.keys():
+            print(f"Кол-во прокси с протоколом {proxies}: {len(data.get(proxies))}")
+
+    def set_proxy(
+        self,
+        scraper: CloudScraper,
+        filename: str = "proxy_file.json",
+        proxy_type: ProxyTypes = ProxyTypes.HTTPS.value,
+    ) -> bool:
+        proxies: dict[str, list[str]] = self.__load_proxies(filename)
+        if not proxies:
+            print("Прокси не найдены")
+            return False
+
+        for proxy in proxies.get(proxy_type):
+            scraper.proxies = f"{proxy_type}://{proxy}"
+            result = self.__test_proxies(scraper)
+            if result:
+                return True
+        print("Прокси не прошли проверку")
+        return False
+
+    # Методы для работы с куки файлами и заголовками
+
+    def __save_cookies(self, scraper: CloudScraper):
+        with open(self.cookie_file, "wb") as f:
+            pickle.dump(scraper.cookies.get_dict(), f)
+
+    def __load_cookies(self, scraper: CloudScraper):
+        if os.path.exists(self.cookie_file):
+            with open(self.cookie_file, "rb") as f:
+                cookies = pickle.load(f)
+                scraper.cookies.update(cookies)
+
+    def __load_user_agents(self, filename: str = "User-Agent.json") -> list[str]:
+        if not os.path.exists(filename):
+            return []
+
+        try:
+            with open(filename, "r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return []
+
+        if not isinstance(data, dict):
+            return []
+        user_agents = data.get("UserAgent")
+
+        if isinstance(user_agents, list):
+            return [str(ua) for ua in user_agents if isinstance(ua, str)]
+
+        if isinstance(user_agents, str):
+            return [user_agents]
+
+        return []
+
+    def __save_user_agents(self, ua: str, filename: str = "User-Agent.json"):
+        if os.path.exists(filename):
+            try:
+                with open(filename, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+            except (json.JSONDecodeError, FileNotFoundError):
+                data = {}
+        else:
+            data = {}
+
+        if not isinstance(data, dict):
+            data = {}
+
+        user_agents = data.get("UserAgent")
+        if not isinstance(user_agents, list):
+            if isinstance(user_agents, str):
+                user_agents = [user_agents]
+            else:
+                user_agents = []
+
+        if ua not in user_agents:
+            user_agents.append(ua)
+
+        data["UserAgent"] = user_agents
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def headers_cookies_get_and_save(self, scraper: CloudScraper):
+        response = scraper.get(self.base_url)
+        if response.status_code != 200:
+            print(
+                f"Куки не получены, заголовки не прошли, ошибка: {response.reason} {response.status_code}\nВозможно стоит подождать или изменить настройки скрапера"
+            )
+            return None
+
+        print("Запрос успешен, сохраняем куки и заголовки")
+        self.__save_cookies(scraper)
+        self.__save_user_agents(scraper.headers.get('User-Agent'))
+
+    # Запросы и скрапер
+
+    def create_scraper(
+        self,
+        delay: int = 15,
+        stealth_min: float = 3.0,
+        stealth_max: float = 6.0,
+        high_security: bool = False,
+        user_agent_num: int = 0,
+    ) -> CloudScraper:
+        if high_security:
+            scraper = create_high_security_scraper(
+                delay=delay,
+                browser="chrome",
+                debug=False,  # Отладка
+                enable_stealth=True,
+                stealth_options={
+                    "min_delay": stealth_min,
+                    "max_delay": stealth_max,
+                    "human_like_delays": True,
+                    "randomize_headers": True,
+                    "browser_quirks": True,
+                },
+            )
+
+        else:
+            scraper = create_scraper(
+                interpreter="hybrid",  # js2py nodejs, hybrid но нужен playwright
+                delay=delay,
+                browser="chrome",
+                debug=False,  # Отладка
+                enable_stealth=True,
+                stealth_options={
+                    "min_delay": stealth_min,
+                    "max_delay": stealth_max,
+                    "human_like_delays": True,
+                    "randomize_headers": True,
+                    "browser_quirks": True,
+                },
+            )
+
+        ua = self.__load_user_agents()[user_agent_num]
+        if not ua:
+            user_agent = UserAgent()
+            ua = user_agent.random
+        scraper.headers.update({
+            "User-Agent": ua,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": f"{self.base_url}/",
+            "Origin": self.base_url,
+            "DNT": "1",
+        })
+        self.logger.info(
+            f"\nUser-Agent: {ua}\nscraper interpreter: {scraper.interpreter=}"
+        )
+        self.__load_cookies(scraper)
+        return scraper
+
+    def get_city_id_multi(self, city_name: str, scraper: CloudScraper) -> List[Dict]:
+        encoded_city = parse.quote(city_name)
+        url = "https://www.avito.ru/web/1/slocations?q=" + encoded_city
+
+        response = scraper.get(url, timeout=15)
+        if response.status_code != 200:
+            self.logger.error(
+                f"{response.status_code} {response.reason}\n{response.headers}"
+            )
+            print(
+                f"{response.status_code=} {response.reason}, исправьте настройки cloudscraper или используемые прокси"
+            )
+            return []
+        self.logger.info(f"status code: {response.status_code}\n{response.headers}")
+        self.__save_cookies(scraper)
+
+        data = response.json()
+        locations = data.get("result", {}).get("locations", [])
+
+        cities_list = []
+        for loc in locations:
+            if "parent" in loc:
+                city_id = loc["id"]
+                city_name_found = loc.get("names", {}).get("1")
+                region_id = loc["parent"].get("id")
+                region_name = loc["parent"].get("names", {}).get("1")
+                cities_list.append(
+                    {
+                        "city_id": city_id,
+                        "city_name": city_name_found,
+                        "region_id": region_id,
+                        "region_name": region_name,
+                    }
+                )
+
+            elif "from" in loc:
+                from_data = loc["from"]
+                city_name_found = from_data.get("name")
+                region_name = loc.get("names", {}).get("1")
+                city_id = loc["id"]
+                cities_list.append(
+                    {
+                        "city_id": city_id,
+                        "city_name": city_name_found,
+                        "region_id": None,
+                        "region_name": region_name,
+                    }
+                )
+
+        if not cities_list:
+            self.logger.info(f'Города по запросу "{city_name}" не найдены')
+            print(f'Города по запросу "{city_name}" не найдены')
+        return cities_list
 
     def get_items(self, url: str, scraper: CloudScraper, filename: str = "output.json"):
         response = scraper.get(url, timeout=20)
@@ -332,13 +425,15 @@ class AvitoScraper:
                 f"{response.status_code=} {response.reason}, исправьте настройки cloudscraper или используемые прокси"
             )
             return
+        print("Данные получены успешно")
         self.logger.info(f"status code: {response.status_code}\n{response.headers}")
-        self.save_cookies(scraper)
+        self.__save_cookies(scraper)
 
-        data = response.json()
+        data: dict = response.json()
         items: dict[dict] = data.get("catalog").get("items")
 
         if not items:
+            self.logger.error(data.get("catalog"))
             print("Нет товаров для обработки. Завершение.")
             return
 
@@ -352,25 +447,26 @@ class AvitoScraper:
 
         print(f"\nНайдено товаров: {len(items)}")
         print(f"Всего различных полей верхнего уровня: {len(ordered_keys)}")
-        self.print_keys_with_index(ordered_keys)
+        self.__print_keys_with_index(ordered_keys)
 
-        top_selected = self.choose_numbers(
-            ordered_keys, "Введите номера полей верхнего уровня для сохранения: "
+        top_selected = self.__choose_numbers(
+            ordered_keys,
+            "Введите номера полей верхнего уровня для сохранения\nПример 5-6, 11-12, 15, 24: ",
         )
         print(f"\nВыбраны поля верхнего уровня: {', '.join(top_selected)}")
 
         top_selectors = {}
         for key in top_selected:
-            sample = self.get_sample_for_key(items, key)
+            sample = self.__get_sample_for_key(items, key)
             if sample is not None:
                 print(f"\n--- Настройка для ключа '{key}' ---")
-                selector = self.choose_fields(sample, indent=0, path=key)
+                selector = self.__choose_fields(sample, indent=0, path=key)
                 top_selectors[key] = selector
 
             else:
                 top_selectors[key] = self.ALL_FIELDS
 
-        filtered_items = self.filter_items(items, top_selectors)
+        filtered_items = self.__filter_items(items, top_selectors)
 
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(filtered_items, f, ensure_ascii=False, indent=2)
@@ -438,11 +534,35 @@ class AvitoScraper:
 
         print(f"Данные для {url} добавлены в файл {filename}")
 
+    def create_url(
+        self,
+        categoryId: Categories,
+        locationId: CityLocationID,
+        radiusNumber: int | str = 0,
+        searchId: SearchTypes = SearchTypes.DEFAULT.value,
+        page_number: int = 0,
+        params: list[str] = [],
+        localPriority: int = 0,
+    ) -> str:
+        query_list: list[str] = [
+            f"categoryId={categoryId}",
+            f"locationId={locationId}",
+            f"radius={radiusNumber}",
+            f"s={searchId}",
+            f"p={page_number}",
+            f"localPriority={localPriority}",
+        ]
+
+        resultUrl = f"https://www.avito.ru/web/1/js/items?" + "&".join(query_list)
+        return resultUrl
+
     def data_filter(
         self, filename: str = "output.json", time_interval: int = 172800
     ) -> bool:
         with open(filename, "r", encoding="utf-8") as file:
             data: list[dict] = json.load(file)
+        if not data:
+            return False
 
         items: list = []
         for item in data:
@@ -461,5 +581,5 @@ class AvitoScraper:
                 f"\nПри отсеве данных были удалены лишние записи ({len(items)}) позже указанного временного промежутка."
             )
             return True
-        print(f'\nВсе объявления ({len(items)}) подпадают под временной промежуток')
+        print(f"\nВсе объявления ({len(items)}) подпадают под временной промежуток")
         return False
